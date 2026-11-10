@@ -1,11 +1,11 @@
 # galileo-iced
 
-A [Galileo](galileo) map widget for the [`iced`] GUI framework.
+A map widget for `iced` backed by `galileo` renderer
 
-# Usage
+## Usage
 
-Keep a [`MapState`] in your application state, build a [`MapWidget`] from
-it in `view`, and return [`MapState::redraw_subscription`] from
+Keep a `MapState` in application state, build a `MapWidget` from
+it in `view`, and return `MapState::redraw_subscription` from
 `subscription`:
 
 ```
@@ -49,9 +49,9 @@ impl App {
 The subscription is not optional: tiles load in the background, and without
 it iced has no reason to repaint when they arrive.
 
-# Overlays
+## Overlays
 
-[`MapWidget::push`] puts an ordinary iced widget to a geographic position.
+`MapWidget::push` puts an ordinary iced widget to a geographic position.
 It keeps its place as the map moves, and behaves like any other child in any other container.
 
 ```
@@ -62,12 +62,12 @@ fn view(state: &MapState) -> Element<'_, Message> {
 }
 ```
 
-[`MapState::project`] exposes the same geographic-to-screen conversion for
+`MapState::project` exposes the same geographic-to-screen conversion for
 cases that need the coordinates directly.
 
-# Clicks
+## Clicks
 
-[`MapWidget::on_click`] reports a button pressed and released on the map
+`MapWidget::on_click` reports a button pressed and released on the map
 without dragging it.
 
 ```
@@ -81,9 +81,9 @@ fn view(state: &MapState) -> Element<'_, Message> {
 }
 ```
 
-# Showing where the pointer is
+## Showing where the pointer is
 
-[`MapWidget::on_cursor_move`] reports the position under the pointer, as a
+`MapWidget::on_cursor_move` reports the position under the pointer, as a
 `GeoPoint2d`, and `None` once it leaves the map:
 
 ```
