@@ -9,7 +9,9 @@ use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use galileo::control::{EventProcessor, MapController, UserEventHandler};
+use galileo::control::{
+    EventPropagation, EventProcessor, MapController, UserEvent, UserEventHandler,
+};
 use galileo::galileo_types::cartesian::{CartesianPoint2d, Point2, Size as MapSize};
 use galileo::galileo_types::geo::impls::GeoPoint2d;
 use galileo::galileo_types::geo::{GeoPoint, NewGeoPoint, Projection};
@@ -83,19 +85,20 @@ pub(crate) struct Handle {
     /// Taken by the first [`MapState::redraw_subscription`] that runs.
     redraw_rx: Mutex<Option<mpsc::UnboundedReceiver<()>>>,
     runtime: TokioRuntime,
-    /// Builds the event handler chain for a widget.
-    ///
-    /// `UserEventHandler` is not `Send`, so the handlers themselves cannot
-    /// live in this (shared, `Send + Sync`) state; each widget keeps its own
-    /// chain in the iced widget tree and builds it from here.
-    handlers: Arc<HandlerFactory>,
+    handlers: Vec<Arc<dyn UserEventHandler>>,
 }
 
 // Necessary to avoid overflow on auto-trait check
 unsafe impl Send for Handle {}
 unsafe impl Sync for Handle {}
 
-type HandlerFactory = dyn Fn() -> Vec<Box<dyn UserEventHandler>> + Send + Sync + 'static;
+struct Shared(Arc<dyn UserEventHandler>);
+
+impl UserEventHandler for Shared {
+    fn handle(&self, event: &UserEvent, map: &mut Map) -> EventPropagation {
+        self.0.handle(event, map)
+    }
+}
 
 impl Handle {
     pub fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -141,13 +144,18 @@ impl MapState {
     /// Creates the state for `map` with the default [`MapController`], which
     /// provides grab-to-pan, wheel zoom and rotation.
     pub fn new(map: Map) -> Self {
-        Self::with_handlers(map, Vec::new)
+        Self::with_handlers(map, Vec::<Arc<dyn UserEventHandler>>::new())
     }
 
     /// Creates the state for `map` with extra event handlers. The handlers see events before the default [`MapController`]
-    pub fn with_handlers<I>(mut map: Map, handlers: impl Fn() -> I + Send + Sync + 'static) -> Self
+    ///
+    /// Accepts anything that converts into `Arc<dyn UserEventHandler>`, so
+    /// `Box<dyn UserEventHandler>` and `Arc<dyn UserEventHandler>` both work.
+    /// The handlers are shared by every widget displaying this map, so a
+    /// handler with interior state sees the events of all of them.
+    pub fn with_handlers<H>(mut map: Map, handlers: impl IntoIterator<Item = H>) -> Self
     where
-        I: IntoIterator<Item = Box<dyn UserEventHandler>>,
+        H: Into<Arc<dyn UserEventHandler>>,
     {
         static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -179,7 +187,7 @@ impl MapState {
                 id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
                 redraw_rx: Mutex::new(Some(rx)),
                 runtime: TokioRuntime::acquire(),
-                handlers: Arc::new(move || handlers().into_iter().collect()),
+                handlers: handlers.into_iter().map(Into::into).collect(),
             }),
         }
     }
@@ -187,8 +195,8 @@ impl MapState {
     pub(crate) fn event_processor(&self) -> EventProcessor {
         let mut events = EventProcessor::default();
 
-        for handler in (self.handle.handlers)() {
-            events.add_handler_boxed(handler);
+        for handler in &self.handle.handlers {
+            events.add_handler(Shared(handler.clone()));
         }
 
         // Added last so that custom handlers can consume events first
