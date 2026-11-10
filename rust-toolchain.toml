@@ -1,0 +1,3 @@
+# font-kit pulls in pathfinder_simd, which uses `core::intrinsics::simd` functions that no longer exist on nightly
+[toolchain]
+channel = "stable"
