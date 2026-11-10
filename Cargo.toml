@@ -11,14 +11,14 @@ crate-type = ["lib"]
 
 
 [dependencies]
-galileo = { path = "../galileo/galileo" }
-iced_core = { version = "0.14" }
-iced_graphics = { version = "0.14" }
-iced_wgpu = { version = "0.14" }
-iced_futures = { version = "0.14" }
+galileo = { git = "https://github.com/galileo-map/galileo.git", rev = "6bd45868da9ba97a4a117b491714a01f1a842da6" }
+iced_core = { git = "https://github.com/iced-rs/iced.git", rev = "8ff48c42b0d5188223501ea1ccc506fd5beaf36a" }
+iced_graphics = { git = "https://github.com/iced-rs/iced.git", rev = "8ff48c42b0d5188223501ea1ccc506fd5beaf36a" }
+iced_wgpu = { git = "https://github.com/iced-rs/iced.git", rev = "8ff48c42b0d5188223501ea1ccc506fd5beaf36a" }
+iced_futures = { git = "https://github.com/iced-rs/iced.git", rev = "8ff48c42b0d5188223501ea1ccc506fd5beaf36a" }
 log = "0.4"
 tokio = { version = "1" }
 
 [dev-dependencies]
-iced = "0.14"
+iced = { git = "https://github.com/iced-rs/iced.git", rev = "8ff48c42b0d5188223501ea1ccc506fd5beaf36a" }
 

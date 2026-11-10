@@ -91,6 +91,10 @@ pub(crate) struct Handle {
     handlers: Arc<HandlerFactory>,
 }
 
+// Necessary to avoid overflow on auto-trait check
+unsafe impl Send for Handle {}
+unsafe impl Sync for Handle {}
+
 type HandlerFactory = dyn Fn() -> Vec<Box<dyn UserEventHandler>> + Send + Sync + 'static;
 
 impl Handle {

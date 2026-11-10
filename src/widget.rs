@@ -7,11 +7,11 @@ use galileo::control::{EventProcessor, MouseButton, RawUserEvent, TouchEvent};
 use galileo::galileo_types::cartesian::{Point2, Size as MapSize};
 use galileo::galileo_types::geo::impls::GeoPoint2d;
 use galileo::galileo_types::geo::{GeoPoint, NewGeoPoint};
-use iced_core::widget::Operation;
 use iced_core::widget::tree::{self, Tree};
+use iced_core::widget::{Meta, Operation};
 use iced_core::{
-    Clipboard, Element, Event, Layout, Length, Point, Rectangle, Shell, Size, Vector, Widget,
-    alignment, layout, mouse, overlay, renderer, touch,
+    Event, Layout, Length, Point, Rectangle, Shell, Size, Vector, Widget, alignment, layout, mouse,
+    overlay, renderer, touch,
 };
 
 use crate::pipeline::MapPrimitive;
@@ -34,9 +34,7 @@ const CLICK_DURATION: Duration = Duration::from_millis(500);
 const CLICK_DISTANCE: f32 = 3.0;
 
 /// Creates a map widget for the given state.
-pub fn map<'a, Message, Theme, Renderer>(
-    state: &MapState,
-) -> MapWidget<'a, Message, Theme, Renderer> {
+pub fn map<Message, W>(state: &MapState) -> MapWidget<Message, W> {
     MapWidget::new(state)
 }
 
@@ -72,7 +70,7 @@ pub fn map<'a, Message, Theme, Renderer>(
 ///         .into()
 /// }
 /// ```
-pub struct MapWidget<'a, Message, Theme, Renderer> {
+pub struct MapWidget<Message, W> {
     state: MapState,
     width: Length,
     height: Length,
@@ -82,7 +80,7 @@ pub struct MapWidget<'a, Message, Theme, Renderer> {
     grab_cursor: bool,
     // Children
     pins: Vec<Pin>,
-    children: Vec<Element<'a, Message, Theme, Renderer>>,
+    children: Vec<W>,
 }
 
 /// A click on the map: a button pressed and released without the pointer
@@ -131,7 +129,7 @@ impl Pin {
     }
 }
 
-impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
+impl<Message, W> MapWidget<Message, W> {
     /// Creates a widget that fills the space available to it.
     pub fn new(state: &MapState) -> Self {
         Self {
@@ -148,11 +146,7 @@ impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
     }
 
     /// Puts `element` on a geographic position, centred on it
-    pub fn push(
-        self,
-        element: impl Into<Element<'a, Message, Theme, Renderer>>,
-        position: impl GeoPoint<Num = f64>,
-    ) -> Self {
+    pub fn push(self, element: W, position: impl GeoPoint<Num = f64>) -> Self {
         self.push_anchored(
             element,
             position,
@@ -164,7 +158,7 @@ impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
     /// Pins `element` to a geographic position
     pub fn push_anchored(
         mut self,
-        element: impl Into<Element<'a, Message, Theme, Renderer>>,
+        element: W,
         position: impl GeoPoint<Num = f64>,
         horizontal: alignment::Horizontal,
         vertical: alignment::Vertical,
@@ -174,7 +168,7 @@ impl<'a, Message, Theme, Renderer> MapWidget<'a, Message, Theme, Renderer> {
             horizontal,
             vertical,
         });
-        self.children.push(element.into());
+        self.children.push(element);
 
         self
     }
@@ -344,10 +338,12 @@ struct Controls {
     animating: Option<MapView>,
 }
 
-impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer>
-    for MapWidget<'_, Message, Theme, Renderer>
+impl<Message, W> Meta for MapWidget<Message, W> {}
+
+impl<Message, Theme, Renderer, W> Widget<Message, Theme, Renderer> for MapWidget<Message, W>
 where
     Renderer: iced_wgpu::primitive::Renderer,
+    W: Widget<Message, Theme, Renderer>,
 {
     fn tag(&self) -> tree::Tag {
         tree::Tag::of::<Controls>()
@@ -362,28 +358,21 @@ where
         })
     }
 
-    fn children(&self) -> Vec<Tree> {
-        self.children.iter().map(Tree::new).collect()
-    }
-
-    fn diff(&self, tree: &mut Tree) {
-        tree.diff_children(&self.children);
+    fn diff(&mut self, tree: &mut Tree) {
+        tree.diff_children(&mut self.children);
     }
 
     fn size(&self) -> Size<Length> {
         Size::new(self.width, self.height)
     }
 
-    fn layout(
-        &mut self,
-        tree: &mut Tree,
-        renderer: &Renderer,
-        limits: &layout::Limits,
-    ) -> layout::Node {
+    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) {
         let size = limits.resolve(self.width, self.height, Size::ZERO);
 
+        tree.size = size;
+
         if self.children.is_empty() {
-            return layout::Node::new(size);
+            return;
         }
 
         let view = self
@@ -395,50 +384,42 @@ where
 
         let child_limits = layout::Limits::new(Size::ZERO, size);
 
-        let children = self
+        for ((element, pin), tree) in self
             .children
             .iter_mut()
             .zip(&self.pins)
             .zip(&mut tree.children)
-            .map(|((element, pin), tree)| {
-                let node = element
-                    .as_widget_mut()
-                    .layout(tree, renderer, &child_limits);
+        {
+            element.layout(tree, renderer, &child_limits);
 
-                match projector
-                    .as_ref()
-                    .and_then(|projector| projector.project(&pin.position))
-                {
-                    Some(point) => {
-                        let corner = pin.anchor(point, node.size());
-                        node.move_to(corner)
-                    }
-                    // Off screen, or behind the camera on a tilted map
-                    None => node.move_to(Point::new(size.width, size.height)),
-                }
-            })
-            .collect();
+            let corner = match projector
+                .as_ref()
+                .and_then(|projector| projector.project(&pin.position))
+            {
+                Some(point) => pin.anchor(point, tree.size),
+                // Off screen, or behind the camera on a tilted map
+                None => Point::new(size.width, size.height),
+            };
 
-        layout::Node::with_children(size, children)
+            tree.translation = Vector::new(corner.x, corner.y);
+        }
     }
 
     fn operate(
         &mut self,
         tree: &mut Tree,
-        layout: Layout<'_>,
+        layout: Layout,
+        viewport: &Rectangle,
         renderer: &Renderer,
         operation: &mut dyn Operation,
     ) {
-        operation.container(None, layout.bounds());
+        operation.container(None, layout.bounds(), viewport);
         operation.traverse(&mut |operation| {
             self.children
                 .iter_mut()
-                .zip(&mut tree.children)
-                .zip(layout.children())
-                .for_each(|((element, tree), layout)| {
-                    element
-                        .as_widget_mut()
-                        .operate(tree, layout, renderer, operation);
+                .zip(layout.iter_mut(&mut tree.children))
+                .for_each(|(element, (layout, tree))| {
+                    element.operate(tree, layout, viewport, renderer, operation);
                 });
         });
     }
@@ -447,10 +428,9 @@ where
         &mut self,
         tree: &mut Tree,
         event: &Event,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         renderer: &Renderer,
-        clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
@@ -465,12 +445,11 @@ where
 
         let positional = positional(event);
 
-        for ((element, tree), layout) in self
+        for (element, (layout, tree)) in self
             .children
             .iter_mut()
             .rev()
-            .zip(child_trees.iter_mut().rev())
-            .zip(layout.children().rev())
+            .zip(layout.iter_mut(child_trees).rev())
         {
             let reachable = layout.bounds().intersects(&bounds);
 
@@ -478,9 +457,7 @@ where
                 continue;
             }
 
-            element.as_widget_mut().update(
-                tree, event, layout, cursor, renderer, clipboard, shell, viewport,
-            );
+            element.update(tree, event, layout, cursor, renderer, shell, viewport);
 
             if shell.is_event_captured() {
                 return;
@@ -490,9 +467,7 @@ where
                 continue;
             }
 
-            let interaction = element
-                .as_widget()
-                .mouse_interaction(tree, layout, cursor, viewport, renderer);
+            let interaction = element.mouse_interaction(tree, layout, cursor, viewport, renderer);
 
             if interaction != mouse::Interaction::None {
                 cursor = cursor.levitate();
@@ -549,7 +524,7 @@ where
     fn mouse_interaction(
         &self,
         tree: &Tree,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
         renderer: &Renderer,
@@ -560,13 +535,10 @@ where
             .children
             .iter()
             .rev()
-            .zip(tree.children.iter().rev())
-            .zip(layout.children().rev())
-            .filter(|((_, _), layout)| layout.bounds().intersects(&bounds))
-            .map(|((element, tree), layout)| {
-                element
-                    .as_widget()
-                    .mouse_interaction(tree, layout, cursor, viewport, renderer)
+            .zip(layout.iter(&tree.children).rev())
+            .filter(|(_, (layout, _))| layout.bounds().intersects(&bounds))
+            .map(|(element, (layout, tree))| {
+                element.mouse_interaction(tree, layout, cursor, viewport, renderer)
             })
             .find(|interaction| *interaction != mouse::Interaction::None);
 
@@ -593,7 +565,7 @@ where
         renderer: &mut Renderer,
         theme: &Theme,
         style: &renderer::Style,
-        layout: Layout<'_>,
+        layout: Layout,
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
@@ -615,19 +587,12 @@ where
         }
 
         renderer.with_layer(visible, |renderer| {
-            for ((element, tree), layout) in self
-                .children
-                .iter()
-                .zip(&tree.children)
-                .zip(layout.children())
-            {
+            for (element, (layout, tree)) in self.children.iter().zip(layout.iter(&tree.children)) {
                 if !layout.bounds().intersects(&visible) {
                     continue;
                 }
 
-                element
-                    .as_widget()
-                    .draw(tree, renderer, theme, style, layout, cursor, &visible);
+                element.draw(tree, renderer, theme, style, layout, cursor, &visible);
             }
         });
     }
@@ -635,11 +600,12 @@ where
     fn overlay<'b>(
         &'b mut self,
         tree: &'b mut Tree,
-        layout: Layout<'b>,
+        layout: Layout,
         renderer: &Renderer,
         viewport: &Rectangle,
         translation: Vector,
-    ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
+        window: Size,
+    ) -> Vec<overlay::Element<'b, Message, Theme, Renderer>> {
         overlay::from_children(
             &mut self.children,
             tree,
@@ -647,19 +613,8 @@ where
             renderer,
             viewport,
             translation,
+            window,
         )
-    }
-}
-
-impl<'a, Message, Theme, Renderer> From<MapWidget<'a, Message, Theme, Renderer>>
-    for Element<'a, Message, Theme, Renderer>
-where
-    Renderer: iced_wgpu::primitive::Renderer + 'a,
-    Message: 'a,
-    Theme: 'a,
-{
-    fn from(widget: MapWidget<'a, Message, Theme, Renderer>) -> Self {
-        Element::new(widget)
     }
 }
 

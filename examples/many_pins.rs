@@ -10,7 +10,7 @@ use galileo::layer::raster_tile_layer::RasterTileLayerBuilder;
 use galileo::{Map, MapBuilder};
 use galileo_iced::{MapState, MapWidget};
 use iced::widget::{button, column, container, row, stack, text};
-use iced::{Element, Font, Length, Subscription};
+use iced::{Font, Length, Subscription, Widget};
 
 const COUNTS: [usize; 6] = [0, 100, 1000, 5000, 10_000, 25_000];
 
@@ -107,7 +107,7 @@ impl App {
         }
     }
 
-    fn view(&self) -> Element<'_, Message> {
+    fn view(&self) -> impl Widget<Message> {
         let started = Instant::now();
 
         let mut map = MapWidget::new(&self.map);
@@ -142,7 +142,7 @@ impl App {
             );
         }
 
-        stack![map, self.hud()].into()
+        stack![map, self.hud()]
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -155,7 +155,7 @@ impl App {
         }
     }
 
-    fn hud(&self) -> Element<'_, Message> {
+    fn hud(&self) -> impl Widget<Message> {
         let (fps, build, shown) = self.stats.reported.get();
 
         let counts = row(COUNTS.iter().map(|&count| {
@@ -193,7 +193,6 @@ impl App {
         container(column![counts, switches, label(report)].spacing(4))
             .padding(8)
             .align_top(Length::Fill)
-            .into()
     }
 }
 
@@ -233,7 +232,7 @@ impl Stats {
     }
 }
 
-fn pin(index: usize, selected: bool) -> Element<'static, Message> {
+fn pin(index: usize, selected: bool) -> impl Widget<Message> {
     let style = if selected {
         button::primary
     } else {
@@ -246,10 +245,9 @@ fn pin(index: usize, selected: bool) -> Element<'static, Message> {
         .padding(0)
         .style(style)
         .on_press(Message::PointClicked(index))
-        .into()
 }
 
-fn toggle(name: String, active: bool, message: Message) -> Element<'static, Message> {
+fn toggle(name: String, active: bool, message: Message) -> impl Widget<Message> {
     let style = if active {
         button::primary
     } else {
@@ -260,14 +258,12 @@ fn toggle(name: String, active: bool, message: Message) -> Element<'static, Mess
         .padding([2, 6])
         .style(style)
         .on_press(message)
-        .into()
 }
 
-fn label(content: String) -> Element<'static, Message> {
+fn label(content: String) -> impl Widget<Message> {
     container(text(content).size(12).font(Font::MONOSPACE))
         .padding([4, 8])
         .style(container::dark)
-        .into()
 }
 
 /// A position written out for the HUD.
