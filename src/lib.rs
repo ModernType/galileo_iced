@@ -8,5 +8,5 @@ mod widget;
 
 pub use galileo;
 
-pub use state::{MapState, project, unproject};
+pub use state::{MapState, Projector, project, unproject};
 pub use widget::{Click, MapWidget, map};

@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use galileo::control::{EventProcessor, MapController, UserEventHandler};
 use galileo::galileo_types::cartesian::{CartesianPoint2d, Point2, Size as MapSize};
 use galileo::galileo_types::geo::impls::GeoPoint2d;
-use galileo::galileo_types::geo::{GeoPoint, NewGeoPoint};
+use galileo::galileo_types::geo::{GeoPoint, NewGeoPoint, Projection};
 use galileo::layer::attribution::Attribution;
 use galileo::render::WgpuRenderer;
 use galileo::{Map, MapView, Messenger};
@@ -240,6 +240,19 @@ impl MapState {
         project(&self.view(), position)
     }
 
+    /// The map's current transform, for projecting many positions at once.
+    ///
+    /// [`project`](Self::project) locks the map and prepares the transform
+    /// again for every position; this does both once. Use it whenever the
+    /// number of positions is more than a handful — deciding which of a few
+    /// thousand markers are on screen, say.
+    ///
+    /// The result is a snapshot: it stops agreeing with the map as soon as the
+    /// view moves, so build one per frame rather than keeping it.
+    pub fn projector(&self) -> Option<Projector> {
+        Projector::new(&self.view())
+    }
+
     /// The geographic position under a point inside the map widget, given in
     /// logical pixels relative to the widget's top left corner
     ///
@@ -335,16 +348,79 @@ pub(crate) fn view_changed(before: &MapView, after: &MapView) -> bool {
         || before.rotation_z() != after.rotation_z()
 }
 
+/// A view's geographic → screen transform, prepared once and applied many
+/// times.
+///
+/// A projector is a snapshot of one [`MapView`]. Keeping one across frames would
+/// project against a view the map has left
+pub struct Projector {
+    projection: Box<dyn Projection<InPoint = GeoPoint2d, OutPoint = Point2>>,
+    /// The rows of `MapView::map_to_scene_transform` that a point on the map
+    /// plane needs: x, y and w, each as the coefficients of (map x, map y, 1).
+    x: [f64; 3],
+    y: [f64; 3],
+    w: [f64; 3],
+    size: MapSize,
+}
+
+impl Projector {
+    /// `None` when the view cannot project at all: an empty size, a CRS
+    /// without a projection, or no position.
+    pub fn new(view: &MapView) -> Option<Self> {
+        let transform = view.map_to_scene_transform()?;
+
+        let columns = transform.data.0;
+        let row = |index: usize| [columns[0][index], columns[1][index], columns[3][index]];
+
+        Some(Self {
+            projection: view.crs().get_projection()?,
+            x: row(0),
+            y: row(1),
+            w: row(3),
+            size: view.size(),
+        })
+    }
+
+    /// Projects `position`, in logical pixels relative to the widget's top
+    /// left corner, or `None` when it is not on screen.
+    pub fn project(&self, position: &impl GeoPoint<Num = f64>) -> Option<Point> {
+        let geo = GeoPoint2d::latlon(position.lat(), position.lon());
+        let map = self.projection.project(&geo)?;
+
+        let (x, y) = (map.x(), map.y());
+        let apply = |row: [f64; 3]| row[0] * x + row[1] * y + row[2];
+
+        let w = apply(self.w);
+
+        // Galileo divides by `w` without looking at its sign, which turns a
+        // position behind the camera of a tilted map into a mirrored point
+        // somewhere in front of it. `map_geo_to_screen_clipped` only rejects
+        // the ones that land outside the viewport
+        if w <= 0.0 {
+            return None;
+        }
+
+        let screen_x = (apply(self.x) / w + 1.0) * self.size.width() / 2.0;
+        let screen_y = (1.0 - apply(self.y) / w) * self.size.height() / 2.0;
+
+        if screen_x < 0.0
+            || screen_x > self.size.width()
+            || screen_y < 0.0
+            || screen_y > self.size.height()
+        {
+            return None;
+        }
+
+        Some(Point::new(screen_x as f32, screen_y as f32))
+    }
+}
+
 /// Projects `position` through `view`, in logical pixels relative to the
 /// widget's top left corner.
+///
+/// Use [`Projector`] for more than a handful of positions as it caches transformations per map view
 pub fn project(view: &MapView, position: &impl GeoPoint<Num = f64>) -> Option<Point> {
-    // `map_geo_to_screen` happily returns a mirrored point for positions
-    // behind the camera of a tilted map, so take the clipped variant and treat
-    // "off screen" and "not projectable" the same way.
-    let position = GeoPoint2d::latlon(position.lat(), position.lon());
-    let point = view.map_geo_to_screen_clipped(&position)?;
-
-    Some(Point::new(point.x() as f32, point.y() as f32))
+    Projector::new(view)?.project(position)
 }
 
 /// Finds the geographic position under a widget-local point in `view`.

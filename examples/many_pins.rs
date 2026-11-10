@@ -113,14 +113,14 @@ impl App {
         let mut map = MapWidget::new(&self.map);
         let mut shown = 0;
 
-        let view = self.cull.then(|| self.map.view());
+        let projector = self.cull.then(|| self.map.projector()).flatten();
 
         for (index, position) in self.points[..self.count.min(self.points.len())]
             .iter()
             .enumerate()
         {
-            if let Some(view) = &view
-                && galileo_iced::project(view, position).is_none()
+            if let Some(projector) = &projector
+                && projector.project(position).is_none()
             {
                 continue;
             }

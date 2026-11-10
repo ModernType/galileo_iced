@@ -15,7 +15,7 @@ use iced_core::{
 };
 
 use crate::pipeline::MapPrimitive;
-use crate::state::{MapState, project, view_changed};
+use crate::state::{MapState, Projector, view_changed};
 
 /// How many galileo "scroll lines" a pixel of trackpad scrolling is worth
 ///
@@ -391,6 +391,8 @@ where
             .view()
             .with_size(MapSize::new(size.width as f64, size.height as f64));
 
+        let projector = Projector::new(&view);
+
         let child_limits = layout::Limits::new(Size::ZERO, size);
 
         let children = self
@@ -403,7 +405,10 @@ where
                     .as_widget_mut()
                     .layout(tree, renderer, &child_limits);
 
-                match project(&view, &pin.position) {
+                match projector
+                    .as_ref()
+                    .and_then(|projector| projector.project(&pin.position))
+                {
                     Some(point) => {
                         let corner = pin.anchor(point, node.size());
                         node.move_to(corner)
@@ -458,6 +463,8 @@ where
 
         let mut cursor = cursor;
 
+        let positional = positional(event);
+
         for ((element, tree), layout) in self
             .children
             .iter_mut()
@@ -465,12 +472,22 @@ where
             .zip(child_trees.iter_mut().rev())
             .zip(layout.children().rev())
         {
+            let reachable = layout.bounds().intersects(&bounds);
+
+            if positional && !reachable {
+                continue;
+            }
+
             element.as_widget_mut().update(
                 tree, event, layout, cursor, renderer, clipboard, shell, viewport,
             );
 
             if shell.is_event_captured() {
                 return;
+            }
+
+            if !reachable {
+                continue;
             }
 
             let interaction = element
@@ -537,12 +554,15 @@ where
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
+        let bounds = layout.bounds();
+
         let pinned = self
             .children
             .iter()
             .rev()
             .zip(tree.children.iter().rev())
             .zip(layout.children().rev())
+            .filter(|((_, _), layout)| layout.bounds().intersects(&bounds))
             .map(|((element, tree), layout)| {
                 element
                     .as_widget()
@@ -601,6 +621,10 @@ where
                 .zip(&tree.children)
                 .zip(layout.children())
             {
+                if !layout.bounds().intersects(&visible) {
+                    continue;
+                }
+
                 element
                     .as_widget()
                     .draw(tree, renderer, theme, style, layout, cursor, &visible);
@@ -636,6 +660,18 @@ where
 {
     fn from(widget: MapWidget<'a, Message, Theme, Renderer>) -> Self {
         Element::new(widget)
+    }
+}
+
+/// Whether an event is aimed at a place on screen, e.g. depends on coordinates
+fn positional(event: &Event) -> bool {
+    match event {
+        Event::Mouse(event) => !matches!(event, mouse::Event::ButtonReleased(_)),
+        Event::Touch(event) => !matches!(
+            event,
+            touch::Event::FingerLifted { .. } | touch::Event::FingerLost { .. }
+        ),
+        _ => false,
     }
 }
 
